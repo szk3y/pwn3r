@@ -1,0 +1,8 @@
+*.bin
+*.d
+*.o
+*.swp
+.gdb_history
+cmd
+peda-*
+tags
