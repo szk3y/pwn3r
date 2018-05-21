@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 
-from time import sleep
-import socket
-import sys
 from subprocess import Popen, PIPE
-import subprocess
+from time import sleep
+import selectors
 import signal
-import multiprocessing
+import socket
+import subprocess
+import sys
 
 def _p8(num):
     return num.to_bytes(1, byteorder='little')
@@ -77,33 +77,66 @@ def xencode(string):
     else:
         return string
 
-class TimeoutNotice(Exception):
+def xdecode(bytestr):
+    if type(bytestr) is bytes:
+        return bytestr.decode('ascii', 'backslashreplace')
+    else:
+        return bytestr
+
+class TimeoutNotification(Exception):
     pass
 
 def timeout_notice(sig, stack_frame):
-    raise TimeoutNotice()
+    raise TimeoutNotification()
 
 class Tube:
-    def __init__(self, fin, fout, flog=sys.stdout, timeout=0):
+    def __init__(self, fin, fout, flog=sys.stdout, timeout=0, delay=0):
         self.is_silent = False
         self.fin = fin
         self.fout = fout
         self.flog = flog
         self.timeout = timeout
+        self.delay = delay
         # It is not good to set a signal handler here
         signal.signal(signal.SIGALRM, timeout_notice)
 
     def shell(self):
-        pass
+        self.mute()
+        selector = selectors.DefaultSelector()
+        selector.register(self.fin, selectors.EVENT_READ)
+        selector.register(sys.stdin, selectors.EVENT_READ)
+        while True:
+            try:
+                signal.alarm(self.timeout)
+                for key, events in selector.select():
+                    if key.fileobj is self.fin:
+                        try:
+                            data = self.recvline()
+                        except EOFError:
+                            print('End Of File')
+                            return
+                        sys.stdout.write(xdecode(data))
+                        sys.stdout.flush()
+                    elif key.fileobj is sys.stdin:
+                        line = input()
+                        try:
+                            self.fout.write(xencode(line) + b'\n')
+                            self.fout.flush()
+                        except BrokenPipeError:
+                            print('Broken Pipe')
+                            return
+            except TimeoutNotification:
+                print('Timeout!')
+                return
 
-    def log(self, byte_str):
+    def log(self, bytestr):
         if self.is_silent:
             return
-        string = byte_str.decode('ascii', 'backslashreplace')
-        self.flog.write(string)
+        self.flog.write(xdecode(bytestr))
         self.flog.flush()
 
     def send(self, msg):
+        sleep(self.delay)
         msg = xencode(msg)
         self.log(msg)
         self.fout.write(msg)
@@ -139,21 +172,21 @@ class Tube:
         self.is_silent = False
 
 class Process(Tube):
-    def __init__(self, arglist, timeout=None):
+    def __init__(self, arglist, timeout=0, delay=0):
         p = Popen(arglist, stdin=PIPE, stdout=PIPE, stderr=subprocess.STDOUT)
         self.p = p
-        super(Process, self).__init__(fin=p.stdout, fout=p.stdin, timeout=timeout)
+        super(Process, self).__init__(fin=p.stdout, fout=p.stdin, timeout=timeout, delay=delay)
 
     def close(self):
         self.p.terminate()
 
 class Remote(Tube):
-    def __init__(self, host, port, timeout=None):
+    def __init__(self, host, port, timeout=0, delay=0):
         ip = socket.gethostbyname(host)
         self.sock = socket.create_connection((ip, port))
         self.reader = self.sock.makefile(mode='rb', buffering=None)
         self.writer = self.sock.makefile(mode='wb', buffering=None)
-        super(Remote, self).__init__(fin=self.reader, fout=self.writer, timeout=timeout)
+        super(Remote, self).__init__(fin=self.reader, fout=self.writer, timeout=timeout, delay=delay)
 
     def close(self):
         self.reader.close()
@@ -161,12 +194,14 @@ class Remote(Tube):
         self.sock.close()
 
 if __name__ == '__main__':
-    #tube = Remote('localhost', 12345, timeout=10)
-    tube = Process(['cat'], timeout=2)
+    #tube = Remote('localhost', 12345, timeout=3)
+    tube = Process(['cat'], timeout=3, delay=0.5)
     tube.sendline('Hello')
+    print('Waiting...')
     try:
         tube.recvline()
         print('Successfully received!')
-    except TimeoutNotice:
+    except TimeoutNotification:
         print('Timeout!')
-    tube.close()
+        sys.exit(0)
+    tube.shell()
