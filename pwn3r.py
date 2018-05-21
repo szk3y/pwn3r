@@ -6,6 +6,7 @@ import sys
 from subprocess import Popen, PIPE
 import subprocess
 import signal
+import multiprocessing
 
 def _p8(num):
     return num.to_bytes(1, byteorder='little')
@@ -89,7 +90,7 @@ class Tube:
         self.fout = fout
         self.flog = flog
         self.timeout = timeout
-        # It is not good to set signal handler here
+        # It is not good to set a signal handler here
         signal.signal(signal.SIGALRM, timeout_notice)
 
     def shell(self):
