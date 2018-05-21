@@ -83,11 +83,11 @@ def xdecode(bytestr):
     else:
         return bytestr
 
-class TimeoutNotification(Exception):
+class Timeout(Exception):
     pass
 
 def timeout_notice(sig, stack_frame):
-    raise TimeoutNotification()
+    raise Timeout()
 
 class Tube:
     def __init__(self, fin, fout, flog=sys.stdout, timeout=0, delay=0):
@@ -106,28 +106,24 @@ class Tube:
         selector.register(self.fin, selectors.EVENT_READ)
         selector.register(sys.stdin, selectors.EVENT_READ)
         while True:
-            try:
-                signal.alarm(self.timeout)
-                for key, events in selector.select():
-                    if key.fileobj is self.fin:
-                        try:
-                            data = self.recvline()
-                        except EOFError:
-                            print('End Of File')
-                            return
-                        sys.stdout.write(xdecode(data))
-                        sys.stdout.flush()
-                    elif key.fileobj is sys.stdin:
-                        line = input()
-                        try:
-                            self.fout.write(xencode(line) + b'\n')
-                            self.fout.flush()
-                        except BrokenPipeError:
-                            print('Broken Pipe')
-                            return
-            except TimeoutNotification:
-                print('Timeout!')
-                return
+            signal.alarm(self.timeout)
+            for key, events in selector.select():
+                if key.fileobj is self.fin:
+                    try:
+                        data = self.recvline()
+                    except EOFError:
+                        print('End Of File')
+                        return
+                    sys.stdout.write(xdecode(data))
+                    sys.stdout.flush()
+                elif key.fileobj is sys.stdin:
+                    line = input()
+                    try:
+                        self.fout.write(xencode(line) + b'\n')
+                        self.fout.flush()
+                    except BrokenPipeError:
+                        print('Broken Pipe')
+                        return
 
     def log(self, bytestr):
         if self.is_silent:
@@ -194,14 +190,18 @@ class Remote(Tube):
         self.sock.close()
 
 if __name__ == '__main__':
-    #tube = Remote('localhost', 12345, timeout=3)
-    tube = Process(['cat'], timeout=3, delay=0.5)
+    tube = Remote('localhost', 12345, timeout=3)
+    #tube = Process(['cat'], timeout=3, delay=0.5)
     tube.sendline('Hello')
     print('Waiting...')
     try:
         tube.recvline()
         print('Successfully received!')
-    except TimeoutNotification:
+    except Timeout:
         print('Timeout!')
         sys.exit(0)
-    tube.shell()
+    try:
+        tube.shell()
+    except Timeout:
+        print('Timeout!')
+        tube.close()
