@@ -83,7 +83,7 @@ def timeout_notice(sig, stack_frame):
     raise TimeoutNotice()
 
 class Tube:
-    def __init__(self, fin, fout, flog=sys.stdout, timeout=None):
+    def __init__(self, fin, fout, flog=sys.stdout, timeout=0):
         self.is_silent = False
         self.fin = fin
         self.fout = fout
@@ -115,8 +115,7 @@ class Tube:
         self.sendline(str(num))
 
     def recv(self, num):
-        if self.timeout:
-            signal.alarm(self.timeout)
+        signal.alarm(self.timeout)
         data = self.fin.read(num)
         signal.alarm(0)
         self.log(data)
