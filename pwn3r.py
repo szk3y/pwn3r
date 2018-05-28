@@ -100,6 +100,8 @@ class Tube:
         # It is not good to set a signal handler here
         signal.signal(signal.SIGALRM, timeout_notice)
 
+    # FIXME: recvline() cannot receive a string that ends with a prompt like this '> '.
+    #        recv(1) doesn't flush its buffer correctly.
     def shell(self):
         self.mute()
         selector = selectors.DefaultSelector()
@@ -110,7 +112,7 @@ class Tube:
             for key, events in selector.select():
                 if key.fileobj is self.fin:
                     try:
-                        data = self.recvline()
+                        data = self.recvline() # FIXME
                     except EOFError:
                         print('End Of File')
                         return
