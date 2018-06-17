@@ -7,6 +7,7 @@ import signal
 import socket
 import subprocess
 import sys
+import multiprocessing
 
 def _p8(num):
     return num.to_bytes(1, byteorder='little')
@@ -102,7 +103,7 @@ class Tube:
 
     # FIXME: recvline() cannot receive a string that ends with a prompt like this '> '.
     #        recv(1) doesn't flush its buffer correctly.
-    def shell(self):
+    def _shell(self):
         self.mute()
         selector = selectors.DefaultSelector()
         selector.register(self.fin, selectors.EVENT_READ)
@@ -126,6 +127,23 @@ class Tube:
                     except BrokenPipeError:
                         print('Broken Pipe')
                         return
+
+    def shell(self):
+        def _receive(fp_in, fp_out):
+            while True:
+                fp_out.write(xdecode(fp_in.read(1)))
+            return
+        self.mute()
+        receiver = multiprocessing.Process(target=_receive, args=(self.fin, self.flog))
+        receiver.start()
+        try:
+            while True:
+                data = input()
+                self.sendline(data)
+        except KeyboardInterrupt:
+            self.flog.write('*** KeyboardInterrupt ***\n')
+            receiver.terminate()
+        return
 
     def log(self, bytestr):
         if self.is_silent:
