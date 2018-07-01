@@ -8,6 +8,7 @@ import socket
 import subprocess
 import sys
 import multiprocessing
+import os
 
 def _p8(num):
     return num.to_bytes(1, byteorder='little')
@@ -101,48 +102,57 @@ class Tube:
         # It is not good to set a signal handler here
         signal.signal(signal.SIGALRM, timeout_notice)
 
-    # FIXME: recvline() cannot receive a string that ends with a prompt like this '> '.
-    #        recv(1) doesn't flush its buffer correctly.
-    def _shell(self):
-        self.mute()
-        selector = selectors.DefaultSelector()
-        selector.register(self.fin, selectors.EVENT_READ)
-        selector.register(sys.stdin, selectors.EVENT_READ)
-        while True:
-            signal.alarm(self.timeout)
-            for key, events in selector.select():
-                if key.fileobj is self.fin:
-                    try:
-                        data = self.recvline() # FIXME
-                    except EOFError:
-                        print('End Of File')
-                        return
-                    sys.stdout.write(xdecode(data))
-                    sys.stdout.flush()
-                elif key.fileobj is sys.stdin:
-                    line = input()
-                    try:
-                        self.fout.write(xencode(line) + b'\n')
-                        self.fout.flush()
-                    except BrokenPipeError:
-                        print('Broken Pipe')
-                        return
-
-    def shell(self):
-        def _receive(fp_in, fp_out):
-            while True:
-                fp_out.write(xdecode(fp_in.read(1)))
-            return
-        self.mute()
-        receiver = multiprocessing.Process(target=_receive, args=(self.fin, self.flog))
-        receiver.start()
+    def recvall(self):
         try:
             while True:
-                data = input()
-                self.sendline(data)
+                self.flog.write(xdecode(self.fin.read(1)))
+                self.flog.flush()
         except KeyboardInterrupt:
-            self.flog.write('*** KeyboardInterrupt ***\n')
-            receiver.terminate()
+            sys.exit(0)
+
+    def shell(self):
+        self.mute() # turn off echo
+
+        receiver = os.fork()
+        if receiver == 0: # receiver
+            try:
+                self.recvall()
+            except Exception as e:
+                self.flog.write('receiver catched {}\n'.format(e))
+                self.flog.flush()
+                sys.exit(1)
+            sys.exit(0)
+
+        sender = os.fork()
+        if sender == 0: # sender
+            try:
+                while True:
+                    data = sys.stdin.readline()
+                    self.fout.write(xencode(data))
+                    self.fout.flush()
+            except KeyboardInterrupt:
+                sys.exit(0)
+            except Exception as e:
+                self.flog.write('sender catched {}\n'.format(e))
+                self.flog.flush()
+                sys.exit(1)
+            sys.exit(0)
+
+        # parent
+        try:
+            pid, status = os.wait() # wait until either receiver or sender end
+        except KeyboardInterrupt:
+            self.flog.write('KeyboardInterrupt\n')
+            self.flog.flush()
+            sys.exit(0)
+        except Exception as e:
+            self.flog.write('parent catched {}\n'.format(str(e)))
+            self.flog.flush()
+            sys.exit(1)
+        if pid == receiver: # kill the other one
+            os.kill(sender, signal.SIGKILL)
+        else:
+            os.kill(receiver, signal.SIGKILL)
         return
 
     def log(self, bytestr):
@@ -164,7 +174,7 @@ class Tube:
     def sendint(self, num):
         self.sendline(str(num))
 
-    def recv(self, num):
+    def recv(self, num=None):
         signal.alarm(self.timeout)
         data = self.fin.read(num)
         signal.alarm(0)
@@ -210,8 +220,8 @@ class Remote(Tube):
         self.sock.close()
 
 if __name__ == '__main__':
-    tube = Remote('localhost', 12345, timeout=3)
-    #tube = Process(['cat'], timeout=3, delay=0.5)
+    #tube = Remote('localhost', 12345, timeout=3)
+    tube = Process(['cat'], timeout=3, delay=0.5)
     tube.sendline('Hello')
     print('Waiting...')
     try:
